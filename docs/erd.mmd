@@ -4,7 +4,8 @@ erDiagram
     DIM_ITEMS ||--o{ FCT_EVENTS : item_id
     DIM_EVENT_TYPES ||--o{ FCT_EVENTS : event_type_key
 
-    DIM_VISITORS ||--o{ FCT_SESSIONS : visitor_id
+    DIM_VISITORS ||--o{ DIM_SESSIONS : visitor_id
+    DIM_SESSIONS ||--o{ FCT_EVENTS : session_id
     DIM_VISITORS ||--o{ FCT_TRANSACTIONS : visitor_id
 
     DIM_CATEGORIES o|--o{ DIM_CATEGORIES : parent_category_id
@@ -51,7 +52,7 @@ erDiagram
         int event_count
     }
 
-    FCT_SESSIONS {
+    DIM_SESSIONS {
         bigint session_id PK
         bigint visitor_id FK
         int session_start_date_key FK
