@@ -1,0 +1,78 @@
+erDiagram
+    DIM_DATE ||--o{ FCT_EVENTS : date_key
+    DIM_VISITORS ||--o{ FCT_EVENTS : visitor_id
+    DIM_ITEMS ||--o{ FCT_EVENTS : item_id
+    DIM_EVENT_TYPES ||--o{ FCT_EVENTS : event_type_key
+
+    DIM_VISITORS ||--o{ FCT_SESSIONS : visitor_id
+    DIM_VISITORS ||--o{ FCT_TRANSACTIONS : visitor_id
+
+    DIM_CATEGORIES o|--o{ DIM_CATEGORIES : parent_category_id
+
+    DIM_DATE {
+        int date_key PK
+        date date
+        int year
+        int month
+        int week
+        int weekday
+    }
+
+    DIM_VISITORS {
+        bigint visitor_id PK
+        timestamp first_seen_at
+        timestamp last_seen_at
+    }
+
+    DIM_ITEMS {
+        bigint item_id PK
+        timestamp first_seen_at
+        timestamp last_seen_at
+    }
+
+    DIM_EVENT_TYPES {
+        int event_type_key PK
+        varchar event_type
+    }
+
+    DIM_CATEGORIES {
+        bigint category_id PK
+        bigint parent_category_id FK
+    }
+
+    FCT_EVENTS {
+        bigint event_id PK
+        int date_key FK
+        bigint visitor_id FK
+        bigint item_id FK
+        int event_type_key FK
+        bigint session_id FK
+        bigint transaction_id
+        int event_count
+    }
+
+    FCT_SESSIONS {
+        bigint session_id PK
+        bigint visitor_id FK
+        int session_start_date_key FK
+        timestamp started_at
+        timestamp ended_at
+        int event_count
+        int view_count
+        int addtocart_count
+        int transaction_event_count
+        boolean has_purchase
+    }
+
+    FCT_TRANSACTIONS {
+        bigint transaction_id PK
+        bigint visitor_id FK
+        int transaction_date_key FK
+        timestamp transaction_at
+        int item_event_count
+        int distinct_item_count
+    }
+
+    %% No DIM_ITEMS -> DIM_CATEGORIES relationship:
+    %% current source files do not prove item-to-category mapping.
+    %% transaction_id in FCT_EVENTS is a degenerate dimension.
