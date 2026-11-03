@@ -11,6 +11,7 @@ scipy==1.15.2
 # =========================
 SQLAlchemy==2.0.38
 psycopg2-binary==2.9.10
+python-dotenv==1.0.1
 
 # =========================
 # Jupyter environment
