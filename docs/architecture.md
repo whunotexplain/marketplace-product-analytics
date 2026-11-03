@@ -54,10 +54,10 @@ Dimensions:
 - dim_items
 - dim_categories
 - dim_event_types
+- dim_sessions
 
 Facts:
 - fct_events
-- fct_sessions
 - fct_transactions
 
 Каждая таблица имеет PK, отношения — FK там, где это корректно. Факты трассируются до staging через source_load_id и при наличии source_row_number.
@@ -84,7 +84,7 @@ flowchart TB
     D2["dim_visitors<br/>PK visitor_id"]
     D3["dim_items<br/>PK item_id"]
     D4["dim_event_types<br/>PK event_type_key"]
-    D5["fct_sessions<br/>PK session_id<br/>FK visitor_id"]
+    D5["dim_sessions<br/>PK session_id<br/>FK visitor_id"]
     D6["dim_categories<br/>PK category_id<br/>FK parent_category_id → self"]
 
     D1 --> F
@@ -97,7 +97,8 @@ flowchart TB
 dim_categories показана отдельно, поскольку источник содержит иерархию категорий, но не подтверждённую связь с itemid. Не создавать FK dim_items.category_id → dim_categories.category_id, пока mapping не найден в item properties и не проверен.
 
 Дополнительные факты:
-- fct_sessions — одна строка на сессию; агрегирует события посетителя в пределах 30-минутного inactivity timeout.
+- dim_sessions — одна строка на сессию; хранит visitor_id, начало, конец и длительность сессии. fct_events ссылается на session_id.
+- Метрики сессии агрегируются из fct_events по session_id в dm_session_metrics.
 - fct_transactions — одна строка на transactionid; агрегирует строки transaction events.
 
 ## 4. Ключи и связи
@@ -108,7 +109,8 @@ dim_categories показана отдельно, поскольку источ�
 | dim_items | fct_events | 1:M | item_id |
 | dim_date | fct_events | 1:M | date_key |
 | dim_event_types | fct_events | 1:M | event_type_key |
-| dim_visitors | fct_sessions | 1:M | visitor_id |
+| dim_visitors | dim_sessions | 1:M | visitor_id |
+| dim_sessions | fct_events | 1:M | session_id |
 | dim_visitors | fct_transactions | 1:M | visitor_id |
 | dim_categories | dim_categories | 1:M | parent_category_id; NULL у корней |
 
@@ -117,7 +119,7 @@ transaction_id в fct_events — degenerate dimension. При необходим
 ## 5. Сессии и транзакции
 
 ### Сессии
-События сортируются по visitorid и event_at_utc. Если разница с предыдущим событием > 30 минут, начинается новая сессия. session_id — surrogate key. Способ его генерации должен быть стабильным при повторном пересчёте либо документирован как пересоздаваемый.
+События сортируются по visitorid и event_at_utc. Если разница с предыдущим событием > 30 минут, начинается новая сессия. session_id — PK dim_sessions и FK в fct_events. Способ его генерации должен быть стабильным при повторном пересчёте либо документирован как пересоздаваемый.
 
 ### Транзакции
 Перед агрегацией transactionid проверить:
