@@ -1,0 +1,87 @@
+# =========================
+# DATA — never commit raw or processed datasets
+# =========================
+data/raw/*
+data/processed/*
+
+# Keep directory structure in Git
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# =========================
+# PYTHON
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+# JUPYTER
+# =========================
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# =========================
+# ENVIRONMENT & SECRETS
+# =========================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials/
+
+# =========================
+# DATABASE & LOCAL STORAGE
+# =========================
+*.sqlite
+*.sqlite3
+*.db
+postgres_data/
+pgdata/
+.docker/
+
+# =========================
+# LOGS & TEMPORARY FILES
+# =========================
+*.log
+logs/
+tmp/
+temp/
+.cache/
+
+# =========================
+# IDE & EDITOR
+# =========================
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# =========================
+# PROJECT-SPECIFIC
+# =========================
+# Local exports and generated reports
+exports/
+reports/generated/
