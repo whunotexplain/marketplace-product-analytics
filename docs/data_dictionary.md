@@ -131,6 +131,7 @@ category_id — PK. parent_category_id — self-referencing FK на dim_categori
 | dim_items | Один itemid | item_id | first_seen_at, last_seen_at |
 | dim_categories | Одна categoryid | category_id | parent_category_id |
 | dim_event_types | Один тип события | event_type_key | event_type |
+| dim_sessions | Одна сессия одного посетителя | session_id | visitor_id, started_at, ended_at, duration_seconds |
 
 dim_date строится из timestamp в UTC. В dim_event_types ожидаются три подтверждённых значения: view, addtocart, transaction.
 
@@ -139,10 +140,10 @@ dim_date строится из timestamp в UTC. В dim_event_types ожидаю
 | Таблица | Зерно | PK | FK / degenerate key | Меры |
 |---|---|---|---|---|
 | fct_events | Одна исходная строка события после утверждённой политики дублей | event_id | date_key, visitor_id, item_id, event_type_key, session_id; transaction_id — degenerate | event_count = 1 |
-| fct_sessions | Одна сессия одного посетителя | session_id | visitor_id, session_start_date_key | event_count, view_count, addtocart_count, transaction_event_count, has_purchase |
+
 | fct_transactions | Один уникальный transactionid | transaction_id | visitor_id, transaction_date_key | item_event_count, distinct_item_count |
 
-**Правило сессии:** новая сессия начинается, если между соседними событиями одного visitorid прошло более 30 минут. Gap ровно 30 минут остаётся в текущей сессии. Это проектное правило, единое для SQL и Python.
+**Правило сессии:** новая сессия начинается, если между соседними событиями одного visitorid прошло более 30 минут. Gap ровно 30 минут остаётся в текущей сессии. Сессии хранятся в dim_sessions (одна строка на сессию); события ссылаются на неё через session_id. Это проектное правило, единое для SQL и Python.
 
 ### 4.3. Data Marts
 
@@ -199,7 +200,7 @@ dm_category_performance не входит в первую версию: связ
 
 - Главный факт первой версии — fct_events.
 - Транзакции хранятся отдельно на зерне transactionid.
-- Сессии строятся по visitorid с timeout 30 минут.
+- Сессии строятся по visitorid с timeout 30 минут и хранятся в dim_sessions.
 - Категории хранят иерархию, но не связываются с товарами без подтверждённого mapping.
 - GMV, Revenue и AOV не рассчитываются из-за отсутствия денежных атрибутов.
 - Временные метки нормализуются в UTC.
