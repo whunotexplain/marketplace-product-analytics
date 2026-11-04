@@ -1,16 +1,27 @@
-from sqlalchemy import create_engine
+from sqlalchemy import URL, create_engine
 from src.config import DATABASE_CONFIG
 
-DATABASE_URL = (
-    f"postgresql+psycopg2://"
-    f"{DATABASE_CONFIG['user']}:"
-    f"{DATABASE_CONFIG['password']}@"
-    f"{DATABASE_CONFIG['host']}:"
-    f"{DATABASE_CONFIG['port']}/"
-    f"{DATABASE_CONFIG['database']}"
+_REQUIRED_FIELDS = ("host", "port", "database", "user", "password")
+_missing = [field for field in _REQUIRED_FIELDS if not DATABASE_CONFIG.get(field)]
+
+if _missing:
+    raise RuntimeError(
+        "Missing database configuration values: "
+        + ", ".join(_missing)
+        + ". Check the project .env file."
+    )
+
+DATABASE_URL = URL.create(
+    drivername="postgresql+psycopg2",
+    username=DATABASE_CONFIG["user"],
+    password=DATABASE_CONFIG["password"],
+    host=DATABASE_CONFIG["host"],
+    port=int(DATABASE_CONFIG["port"]),
+    database=DATABASE_CONFIG["database"],
 )
 
 engine = create_engine(
     DATABASE_URL,
-    pool_pre_ping=True
+    pool_pre_ping=True,
+    future=True,
 )
