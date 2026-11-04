@@ -1,207 +1,95 @@
 # Data Dictionary — Marketplace Intelligence
 
-> Версия: 1.0  
-> Статус: проектирование  
-> Источник: Retailrocket E-commerce Dataset  
-> Исходные файлы: events.csv, category_tree.csv
+> Source: Retailrocket E-commerce Dataset
+> Implemented database: PostgreSQL
+> Time convention: UTC
 
-## 1. Назначение
+## 1. Source data
 
-Документ фиксирует бизнес-смысл исходных сущностей, зерно будущих таблиц, ключи, связи и правила качества данных. Это контракт для реализации staging, core/DWH и data marts. Если фактические данные противоречат предположению, реализация должна остановиться на проверке, а не молча подгонять данные под модель.
+| Source | Description | Current use |
+|---|---|---|
+| `events.csv` | Visitor event log | Loaded to `staging.stg_events` |
+| `category_tree.csv` | Category hierarchy | Loaded to `staging.stg_categories` |
+| `item_properties_part1.csv`, `item_properties_part2.csv` | Item attributes | Not currently used by the implemented marts |
 
-## 2. Что известно об источнике
+Observed profile from the initial dataset inspection:
 
-| Показатель | Значение |
+| Metric | Value |
 |---|---:|
-| Строки events.csv | 2,756,101 |
-| Уникальные посетители | 1,407,580 |
-| Уникальные товары | 235,061 |
-| Уникальные transactionid | 17,672 |
-| События view | 2,664,312 |
-| События addtocart | 69,332 |
-| События transaction | 22,457 |
-| Категории | 1,669 |
-| Корневые категории | 25 |
-| Полные дубли строк events | 460 |
+| Event rows | 2,756,101 |
+| Unique visitors | 1,407,580 |
+| Unique items | 235,061 |
+| Unique transaction IDs | 17,672 |
+| View event rows | 2,664,312 |
+| Add-to-cart event rows | 69,332 |
+| Transaction event rows | 22,457 |
+| Categories | 1,669 |
+| Fully duplicated event rows | 460 |
 
-### Ограничения источника
+## 2. Staging tables
 
-1. Посетитель представлен только visitorid. Атрибутов профиля пользователя нет.
-2. В событиях нет цены, выручки, количества товара и валюты. Нельзя достоверно рассчитывать GMV, Revenue, AOV или денежный LTV.
-3. category_tree.csv описывает иерархию категорий, но не связывает itemid с categoryid.
-4. Связь товара с категорией нельзя создавать предположительно. Её можно добавить только после проверки item_properties_part1.csv и item_properties_part2.csv.
-5. transactionid ожидаемо отсутствует у view и addtocart.
-6. 22,457 строк transaction соответствуют 17,672 уникальным transactionid. Одна транзакция может содержать несколько строк событий.
-7. Повторные события одного посетителя по одному товару — не обязательно дубли.
+### `staging.stg_events`
 
-## 3. Сущности исходных данных
+**Grain:** one row per ingested event record.
 
-### 3.1 Events — события
-
-Источник: events.csv.
-
-Бизнес-смысл: журнал действий посетителей. Основа воронки, активности, сессий и анализа поведения.
-
-| Поле | Логический тип | NULL | Описание |
-|---|---|---|---|
-| timestamp | BIGINT | Нет | Unix timestamp в миллисекундах |
-| visitorid | BIGINT | Нет | Идентификатор посетителя |
-| event | VARCHAR | Нет | view, addtocart или transaction |
-| itemid | BIGINT | Нет | Идентификатор товара |
-| transactionid | BIGINT | Да | ID транзакции; ожидаемо NULL не для transaction |
-
-**Зерно:** одна строка = одно зарегистрированное событие.
-
-**Ключи:** источник не содержит гарантированного естественного PK события. В DWH используется технический event_id. visitorid, itemid и transactionid — бизнес-идентификаторы, но не PK события.
-
-**Правила:** исходный timestamp сохраняется в staging, дополнительно создаётся event_at_utc. Неизвестный тип события отправляется в карантин качества. Полные дубли маркируются. Повторные действия одного посетителя с одним товаром сохраняются.
-
-### 3.2 Visitors — посетители
-
-Источник: производная сущность из events.csv по visitorid.
-
-Бизнес-смысл: идентификатор посетителя, наблюдаемого в журнале. Это не подтверждённый профиль физического пользователя.
-
-**Зерно:** одна строка = один уникальный visitorid.
-
-| Поле | Тип | Описание |
+| Column | Type | Meaning |
 |---|---|---|
-| visitor_id | BIGINT | Бизнес-идентификатор, PK |
-| first_seen_at | TIMESTAMP | Первое наблюдаемое событие |
-| last_seen_at | TIMESTAMP | Последнее наблюдаемое событие |
-| created_at_dwh | TIMESTAMP | Время создания записи в DWH |
+| event_id | BIGINT identity PK | Technical surrogate key generated at ingestion |
+| visitorid | BIGINT | Source visitor identifier |
+| itemid | BIGINT | Source item identifier |
+| transactionid | BIGINT, nullable | Source transaction identifier |
+| event | VARCHAR(20) | Event type: view, addtocart, transaction |
+| event_timestamp | TIMESTAMP | Event timestamp converted from Unix milliseconds and stored as UTC-naive |
+| source_file | TEXT | Source file name |
+| loaded_at | TIMESTAMPTZ | Database ingestion timestamp |
 
-visitor_id — PK и исходный бизнес-ключ. first_seen_at означает первое наблюдение в датасете, а не дату регистрации.
+The source file has no guaranteed unique event identifier. The generated `event_id` is a staging surrogate key, not a source business key.
 
-### 3.3 Items — товары
+### `staging.stg_categories`
 
-Источник: производная сущность из events.csv по itemid.
+**Grain:** one row per ingested category hierarchy row.
 
-**Зерно:** одна строка = один уникальный itemid.
-
-| Поле | Тип | Описание |
+| Column | Type | Meaning |
 |---|---|---|
-| item_id | BIGINT | Идентификатор товара, PK |
-| first_seen_at | TIMESTAMP | Первое наблюдение товара |
-| last_seen_at | TIMESTAMP | Последнее наблюдение товара |
-| created_at_dwh | TIMESTAMP | Время создания записи в DWH |
+| category_row_id | BIGINT identity PK | Technical surrogate key |
+| categoryid | BIGINT | Source category identifier |
+| parentid | BIGINT, nullable | Parent category identifier; NULL for root |
+| source_file | TEXT | Source file name |
+| loaded_at | TIMESTAMPTZ | Database ingestion timestamp |
 
-item_id — PK; fct_events.item_id — FK. Название, бренд, цена и категория не считаются доступными атрибутами, пока это не подтверждено анализом item properties.
+### `staging.ingestion_batches`
 
-### 3.4 Categories — категории
+Tracks ingestion metadata, including dataset name, source file, checksum and loaded row count. The checksum is used to avoid reloading an identical source file.
 
-Источник: category_tree.csv.
+## 3. Source semantics and limitations
 
-| Поле | Тип | NULL | Описание |
-|---|---|---|---|
-| categoryid | BIGINT | Нет | Идентификатор категории |
-| parentid | BIGINT | Да | Родительская категория; NULL для корня |
+1. `visitorid` is an observed identifier, not a verified real-world customer identity.
+2. `transactionid` is expected to be NULL for view and add-to-cart events.
+3. The 22,457 transaction event rows correspond to 17,672 distinct transaction IDs. One transaction may have multiple item-level event rows.
+4. Repeated events by the same visitor for the same item are not automatically duplicates.
+5. Full duplicate source rows were observed during profiling. The current staging ingestion preserves source rows; the implemented marts do not silently deduplicate them.
+6. Reliable price/currency attributes are not available in the currently implemented analytical model. Do not report GMV, Revenue, AOV or monetary LTV.
+7. `category_tree.csv` defines a hierarchy but does not prove which category belongs to a given item. Do not join items to categories without a validated mapping.
+8. Current timestamps are interpreted as UTC. No visitor-local timezone is available.
 
-**Зерно:** одна строка = одна категория.
+## 4. Implemented Data Marts
 
-category_id — PK. parent_category_id — self-referencing FK на dim_categories.category_id. По профилированию: 1,669 категорий, 25 корневых; отсутствующие ссылки на родителей не обнаружены. Иерархия не доказывает принадлежность конкретного товара к категории.
+See [metric_dictionary.md](metric_dictionary.md) for formulas and interpretation caveats.
 
-### 3.5 Transactions — транзакции
-
-Источник: строки events.csv, где event = transaction.
-
-Бизнес-смысл: агрегированный факт покупки. Один transactionid может объединять несколько строк transaction events.
-
-**Зерно:** одна строка = один уникальный transactionid.
-
-| Поле | Тип | Описание |
+| Mart | Grain | Main columns |
 |---|---|---|
-| transaction_id | BIGINT | Идентификатор транзакции, PK |
-| visitor_id | BIGINT | Покупатель, FK на dim_visitors |
-| transaction_at | TIMESTAMP | Время транзакции |
-| item_event_count | INTEGER | Число исходных строк transaction |
-| distinct_item_count | INTEGER | Число уникальных itemid |
-| created_at_dwh | TIMESTAMP | Время загрузки в DWH |
+| `analytics.dm_daily_kpis` | One row per UTC date | event_date, total_events, dau, views, cart_events, purchase_events, view_users, cart_users, purchase_users, view_to_cart_cr, view_to_purchase_cr |
+| `analytics.dm_conversion_funnel` | One row for full period | view_users, cart_users, purchase_users, view_to_cart_cr, cart_to_purchase_cr, view_to_purchase_cr |
+| `analytics.dm_weekly_retention` | Cohort week × elapsed week | cohort_week, week_number, cohort_size, active_users, retention_rate |
+| `analytics.dm_user_segments` | One row per visitor | visitorid, total_events, views, add_to_carts, purchases, first_activity, last_activity, activity_segment |
+| `analytics.dm_temporal_activity` | UTC weekday × hour | day_of_week, hour_of_day, total_events, unique_users, views, add_to_carts, purchases |
 
-Перед агрегацией проверить, что у одного transactionid один visitorid и согласованное время. Конфликтные группы — в карантин. item_event_count нельзя автоматически трактовать как количество единиц товара. Денежные метрики из источника не рассчитываются.
+## 5. Future model — not currently implemented
 
-## 4. Проектируемые таблицы DWH
+A CORE/star-schema layer, session dimension, event fact and transaction fact were considered during design but are not part of the current implementation. Do not assume those tables exist in the database.
 
-### 4.1. Dimensions
-
-| Таблица | Зерно | PK | Атрибуты |
-|---|---|---|---|
-| dim_date | Один календарный день | date_key | date, day, week, month, quarter, year, weekday |
-| dim_visitors | Один visitorid | visitor_id | first_seen_at, last_seen_at |
-| dim_items | Один itemid | item_id | first_seen_at, last_seen_at |
-| dim_categories | Одна categoryid | category_id | parent_category_id |
-| dim_event_types | Один тип события | event_type_key | event_type |
-| dim_sessions | Одна сессия одного посетителя | session_id | visitor_id, started_at, ended_at, duration_seconds |
-
-dim_date строится из timestamp в UTC. В dim_event_types ожидаются три подтверждённых значения: view, addtocart, transaction.
-
-### 4.2. Facts
-
-| Таблица | Зерно | PK | FK / degenerate key | Меры |
-|---|---|---|---|---|
-| fct_events | Одна исходная строка события после утверждённой политики дублей | event_id | date_key, visitor_id, item_id, event_type_key, session_id; transaction_id — degenerate | event_count = 1 |
-
-| fct_transactions | Один уникальный transactionid | transaction_id | visitor_id, transaction_date_key | item_event_count, distinct_item_count |
-
-**Правило сессии:** новая сессия начинается, если между соседними событиями одного visitorid прошло более 30 минут. Gap ровно 30 минут остаётся в текущей сессии. Сессии хранятся в dim_sessions (одна строка на сессию); события ссылаются на неё через session_id. Это проектное правило, единое для SQL и Python.
-
-### 4.3. Data Marts
-
-| Mart | Зерно | Назначение |
-|---|---|---|
-| dm_daily_product_kpis | Один день | DAU, сессии, события, покупки, конверсии |
-| dm_conversion_funnel | День × этап воронки | View → Add to cart → Purchase |
-| dm_user_retention | Когорта × период | Когортный retention |
-| dm_customer_segments | Один посетитель | Сегменты по наблюдаемому поведению |
-| dm_session_metrics | Одна сессия | Поведение и конверсия сессий |
-
-dm_category_performance не входит в первую версию: связь itemid → categoryid пока не подтверждена. Добавить mart после проверки item properties и создания валидного mapping.
-
-## 5. Правила обработки NULL
-
-| Ситуация | Решение | Причина |
-|---|---|---|
-| transactionid NULL для view/addtocart | Сохранять NULL | Ожидаемая семантика |
-| transactionid NULL для transaction | DQ error / quarantine | Покупку нельзя связать с транзакцией |
-| parentid NULL у категории | Сохранять NULL | Корневая категория |
-| Неизвестный visitorid/itemid при построении факта | Карантин или согласованная техническая Unknown-запись | Не придумывать бизнес-ID |
-| Неизвестный event | Карантин + DQ-метрика | Требуется разбор |
-| Нет item-category mapping | Не заполнять предположением | Связь не подтверждена |
-
-Не заменять NULL на 0, пустую строку или текст 'NULL', если это меняет смысл данных.
-
-## 6. Правила обработки дубликатов
-
-Различаем три случая:
-
-1. **Полный дубль:** совпадают все поля исходной строки. В профилировании найдено 460 таких строк.
-2. **Повторное действие:** тот же посетитель повторно совершил событие с тем же товаром. Сохраняется.
-3. **Повтор товара в транзакции:** одинаковые transactionid и itemid. Требует проверки; не удалять автоматически.
-
-Рекомендуемая политика:
-- RAW — неизменяемое хранение исходной выгрузки.
-- STAGING — сохранять строки и добавлять is_full_duplicate, dq_status, load_id.
-- CORE — исключать полные дубли из аналитического факта только по утверждённому правилу; число исключений сохранять в DQ-отчёте.
-- Повторные visitor-item события не удалять.
-- Для повторных загрузок обеспечить идемпотентность. Источник не содержит event_id, поэтому техническую идентификацию строк и одинаковых дублей необходимо явно документировать.
-
-## 7. Контрольные проверки до DDL
-
-1. У каждого transactionid ровно один visitorid.
-2. Проверить количество различных timestamp внутри transactionid.
-3. Проверить дубли (transactionid, itemid) у transaction.
-4. Проверить наличие itemid в item properties и существование category mapping.
-5. Проверить все FK фактов на измерения.
-6. Проверить уникальность PK.
-7. Сверить число строк до/после дедупликации с DQ-отчётом.
-8. Проверить timezone и границы дат.
-
-## 8. Зафиксированные решения
-
-- Главный факт первой версии — fct_events.
-- Транзакции хранятся отдельно на зерне transactionid.
-- Сессии строятся по visitorid с timeout 30 минут и хранятся в dim_sessions.
-- Категории хранят иерархию, но не связываются с товарами без подтверждённого mapping.
-- GMV, Revenue и AOV не рассчитываются из-за отсутствия денежных атрибутов.
-- Временные метки нормализуются в UTC.
-- Неконсистентные записи не теряются молча: получают DQ-статус и учитываются в отчётности.
+Potential future work:
+- Sessionization using an agreed inactivity threshold.
+- Strict sequential and session-level conversion.
+- Verified item/category mapping.
+- A transaction fact at the unique `transactionid` grain after validating visitor and timestamp consistency.
