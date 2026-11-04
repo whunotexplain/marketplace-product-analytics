@@ -1,3 +1,5 @@
+DROP MATERIALIZED VIEW IF EXISTS analytics.dm_daily_kpis;
+
 -- Grain: one row per UTC calendar date.
 -- Conversion columns are same-day user reach ratios, not sequential funnel rates.
 
