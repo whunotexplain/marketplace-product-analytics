@@ -1,178 +1,89 @@
-# DWH Architecture — Marketplace Intelligence
+# Architecture — Marketplace Intelligence
 
-> Версия: 1.0  
-> Статус: проектирование  
-> Целевая СУБД: PostgreSQL
+> Status: implemented analytics MVP
+> Database: PostgreSQL
+> Primary objective: Product Analytics portfolio project
 
-## 1. Цель
-
-Построить воспроизводимый аналитический контур от исходных CSV до продуктовых метрик и BI. Бизнес-логика метрик централизуется в SQL/Data Marts. Ноутбуки используют готовые витрины, а не повторно рассчитывают KPI из сырых файлов.
-
-## 2. Архитектура слоёв
+## 1. Implemented data flow
 
 ```mermaid
 flowchart LR
-    A["Retailrocket CSV"] --> B["RAW"]
-    B --> C["STAGING"]
-    C --> D["CORE / DWH"]
-    D --> E["DATA MARTS"]
-    E --> F["Analytics Notebook 02"]
-    E --> G["BI Dashboard / DataLens"]
-    C --> Q["DQ quarantine"]
-    C --> R["DQ reports"]
-    D --> R
+    A["Retailrocket CSV"] --> B["Python ingestion"]
+    B --> C["PostgreSQL staging"]
+    C --> D["PostgreSQL analytics Data Marts"]
+    D --> E["Python / Pandas notebook"]
+    D --> F["Yandex DataLens dashboard"]
 ```
 
-### RAW
-- Исходные файлы хранятся без изменений.
-- RAW не коммитится в Git.
-- Фиксируются источник, дата загрузки, имя файла, размер и checksum.
-- Новая загрузка не должна незаметно перезаписывать предыдущую версию.
+The current implementation deliberately keeps the architecture lean. Product metrics are calculated once in SQL Data Marts and reused by Python and BI.
 
-### STAGING
-Назначение: привести типы, нормализовать timestamp и выявить проблемы качества, сохранив трассировку до источника.
+## 2. Implemented PostgreSQL schemas
 
-Таблицы:
-- stg_events
-- stg_category_tree
+### staging
 
-Технические поля:
-- load_id
-- source_file
-- loaded_at
-- source_row_number (если загрузчик может достоверно зафиксировать номер строки)
-- is_full_duplicate
-- dq_status
-- dq_reason
+- `staging.stg_events`: one row per ingested source event, with a technical identity key, source identifiers, event type, UTC-naive event timestamp, source file and load timestamp.
+- `staging.stg_categories`: category hierarchy rows with source category and parent identifiers.
+- `staging.ingestion_batches`: ingestion metadata and file checksum used to skip repeat ingestion of the same file.
 
-Исходный timestamp сохраняется как BIGINT; дополнительно создаётся event_at_utc TIMESTAMP. Неизвестные event types, transaction без transactionid и конфликтные транзакции получают статус quarantine.
+The event timestamp is converted from Unix milliseconds to UTC and stored as `TIMESTAMP WITHOUT TIME ZONE`. Treat it as UTC in all analysis.
 
-### CORE / DWH
-Dimensions:
-- dim_date
-- dim_visitors
-- dim_items
-- dim_categories
-- dim_event_types
-- dim_sessions
+### analytics
 
-Facts:
-- fct_events
-- fct_transactions
+All current Data Marts are PostgreSQL materialized views built directly from `staging.stg_events`.
 
-Каждая таблица имеет PK, отношения — FK там, где это корректно. Факты трассируются до staging через source_load_id и при наличии source_row_number.
-
-### DATA MARTS
-Первая версия:
-- dm_daily_product_kpis
-- dm_conversion_funnel
-- dm_user_retention
-- dm_customer_segments
-- dm_session_metrics
-
-Витрины строятся из CORE, а не напрямую из CSV. Каждая витрина сопровождается описанием зерна и формул в docs/metric_dictionary.md.
-
-## 3. Star Schema
-
-Центральный факт — fct_events: какое событие, когда, кем и с каким товаром было совершено.
-
-```mermaid
-flowchart TB
-    F["fct_events<br/>PK event_id<br/>FK date_key, visitor_id,<br/>item_id, event_type_key,<br/>session_id<br/>transaction_id (degenerate)"]
-
-    D1["dim_date<br/>PK date_key"]
-    D2["dim_visitors<br/>PK visitor_id"]
-    D3["dim_items<br/>PK item_id"]
-    D4["dim_event_types<br/>PK event_type_key"]
-    D5["dim_sessions<br/>PK session_id<br/>FK visitor_id"]
-    D6["dim_categories<br/>PK category_id<br/>FK parent_category_id → self"]
-
-    D1 --> F
-    D2 --> F
-    D3 --> F
-    D4 --> F
-    D5 --> F
-```
-
-dim_categories показана отдельно, поскольку источник содержит иерархию категорий, но не подтверждённую связь с itemid. Не создавать FK dim_items.category_id → dim_categories.category_id, пока mapping не найден в item properties и не проверен.
-
-Дополнительные факты:
-- dim_sessions — одна строка на сессию; хранит visitor_id, начало, конец и длительность сессии. fct_events ссылается на session_id.
-- Метрики сессии агрегируются из fct_events по session_id в dm_session_metrics.
-- fct_transactions — одна строка на transactionid; агрегирует строки transaction events.
-
-## 4. Ключи и связи
-
-| Родитель | Дочерняя таблица | Связь | Условие |
-|---|---|---|---|
-| dim_visitors | fct_events | 1:M | visitor_id |
-| dim_items | fct_events | 1:M | item_id |
-| dim_date | fct_events | 1:M | date_key |
-| dim_event_types | fct_events | 1:M | event_type_key |
-| dim_visitors | dim_sessions | 1:M | visitor_id |
-| dim_sessions | fct_events | 1:M | session_id |
-| dim_visitors | fct_transactions | 1:M | visitor_id |
-| dim_categories | dim_categories | 1:M | parent_category_id; NULL у корней |
-
-transaction_id в fct_events — degenerate dimension. При необходимости можно добавить FK на fct_transactions, но только после проверки целостности групп.
-
-## 5. Сессии и транзакции
-
-### Сессии
-События сортируются по visitorid и event_at_utc. Если разница с предыдущим событием > 30 минут, начинается новая сессия. session_id — PK dim_sessions и FK в fct_events. Способ его генерации должен быть стабильным при повторном пересчёте либо документирован как пересоздаваемый.
-
-### Транзакции
-Перед агрегацией transactionid проверить:
-- один visitorid на транзакцию;
-- согласованное время;
-- отсутствие NULL itemid;
-- повторы (transactionid, itemid).
-
-Только после проверок строить fct_transactions. Нельзя считать каждую строку event=transaction отдельной транзакцией: профилирование показывает 22,457 строк и 17,672 уникальных transactionid.
-
-## 6. Политика качества данных
-
-| Проверка | STAGING | CORE |
+| Object | Grain | Purpose |
 |---|---|---|
-| Полный дубль | Пометить и посчитать | Исключить по утверждённому правилу, сохранить DQ-аудит |
-| Повтор visitor-item event | Сохранить | Сохранить |
-| NULL transactionid для view/addtocart | Допустим | Сохранить NULL |
-| NULL transactionid для transaction | Quarantine | Не включать в транзакционную агрегацию |
-| Неизвестный event type | Quarantine | Не включать в стандартные KPI до разбора |
-| NULL parentid | Допустим | Корневая категория |
-| Несуществующий parentid | DQ error | Не публиковать неконсистентную иерархию |
-| Конфликт visitor/time в transactionid | Quarantine группы | Не агрегировать до исправления |
-| Некорректный timestamp | Quarantine | Не включать во временные витрины |
+| `dm_daily_kpis` | One UTC date | Daily events, DAU, same-day user reach ratios |
+| `dm_conversion_funnel` | Whole observation period | Baseline user reach by event type |
+| `dm_weekly_retention` | Cohort week × elapsed week | Weekly cohort retention |
+| `dm_user_segments` | One visitor | Event-frequency segments |
+| `dm_temporal_activity` | UTC weekday × hour | Temporal activity distribution |
 
-## 7. Метрики и ограничения
+Schema and view DDL are stored in `sql/marts/` and should be executed in numeric order.
 
-- DAU/WAU/MAU: distinct visitorid с хотя бы одним событием за период.
-- Session count: количество сессий по правилу 30 минут.
-- View-to-Cart CR: сессии с addtocart / сессии с view.
-- Cart-to-Purchase CR: сессии с transaction / сессии с addtocart.
-- Overall Purchase CR: сессии с transaction / сессии с view.
-- Retention: когорта по неделе первого наблюдения; календарный W1 и точный D7 должны быть разделены.
-- GMV, Revenue и AOV не рассчитываются: источник не содержит цены и валюты.
+## 3. Metric ownership
 
-Знаменатели, временные границы, timezone и правила дедупликации должны совпадать в SQL, Python и BI.
+- SQL Data Marts define business metric logic.
+- Python loads the Data Marts, validates cross-mart consistency, visualizes results and supports descriptive analysis.
+- DataLens should connect to the same PostgreSQL Data Marts.
+- Metric definitions and interpretation caveats are documented in `docs/metric_dictionary.md`.
 
-## 8. Порядок реализации
+Do not independently redefine the same KPI in Python or BI.
 
-1. Утвердить модель и ERD.
-2. Создать DDL для staging и загрузить CSV.
-3. Реализовать DQ checks и quarantine.
-4. Создать dimensions и facts.
-5. Реализовать сессии и агрегацию транзакций.
-6. Создать data marts и сверить контрольные суммы.
-7. Подключить Notebook 02 и BI.
+## 4. Data quality and known limitations
 
-## 9. Definition of Done
+- The source contains repeated visitor-item actions; these are not automatically duplicates.
+- A small number of fully identical event rows were observed during profiling. The current staging table preserves ingested rows; deduplication is not silently applied in the marts.
+- `transactionid` is expected to be NULL for view and add-to-cart events.
+- Transaction event rows are not equivalent to unique transactions.
+- Reliable price/currency fields are absent, so GMV, Revenue and AOV are not calculated.
+- The category tree does not establish an `itemid → categoryid` mapping. Category performance analysis is excluded until a mapping is verified.
+- The baseline funnel does not enforce event sequence and is not session-level.
+- The retention mart contains observed cohort/week combinations only; missing rows should not automatically be interpreted as zero retention.
+- Temporal metrics are UTC. They are not local-time-of-day metrics for visitors.
 
-- [ ] Для каждой таблицы документировано зерно.
-- [ ] Для каждой таблицы определён PK; для отношений — FK.
-- [ ] Нет неподтверждённой связи товар-категория.
-- [ ] Транзакции агрегируются по transactionid, а не по числу строк.
-- [ ] NULL и дубли обрабатываются по единой политике.
-- [ ] Сессии рассчитываются единым правилом 30 минут.
-- [ ] SQL-модель воспроизводится на исходных данных.
-- [ ] DQ-метрики показывают исключённые и карантинные записи.
+## 5. Materialized view refresh
+
+Materialized views are snapshots. After new data is loaded into staging, refresh them:
+
+```sql
+REFRESH MATERIALIZED VIEW analytics.dm_daily_kpis;
+REFRESH MATERIALIZED VIEW analytics.dm_conversion_funnel;
+REFRESH MATERIALIZED VIEW analytics.dm_weekly_retention;
+REFRESH MATERIALIZED VIEW analytics.dm_user_segments;
+REFRESH MATERIALIZED VIEW analytics.dm_temporal_activity;
+```
+
+The current views do not depend on one another, so they can be refreshed independently.
+
+## 6. Future extensions — not part of the current MVP
+
+The following may be added if a real analytical requirement justifies the complexity:
+
+- A CORE/star-schema layer with dimensions and event/transaction facts.
+- Sessionization with a documented inactivity timeout.
+- A strict sequential and session-level conversion funnel.
+- A verified item-to-category mapping.
+- Experiment assignment and exposure tables for real A/B tests.
+
+These are future extensions. The current portfolio deliverable is a Product Analytics workflow, not a full enterprise Data Warehouse.
