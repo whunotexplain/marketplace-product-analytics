@@ -1,3 +1,5 @@
+DROP MATERIALIZED VIEW IF EXISTS analytics.dm_conversion_funnel;
+
 -- Grain: one row for the full observation period.
 -- This is a baseline user-reach funnel, not a sequential or session-level funnel.
 -- A user may appear at one stage without being observed at the preceding stage.
