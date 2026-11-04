@@ -1,3 +1,5 @@
+DROP MATERIALIZED VIEW IF EXISTS analytics.dm_temporal_activity;
+
 -- Grain: one row per UTC weekday and hour (up to 7 * 24 = 168 rows).
 -- unique_users is distinct across the full observation period within each weekday/hour bucket;
 -- it is not additive across buckets.
