@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import URL, create_engine
 from sqlalchemy.engine import Engine
 
 from src.config import DATABASE_CONFIG
@@ -18,7 +18,7 @@ def get_engine() -> Engine:
             + ". Check the project .env file."
         )
 
-    database_url = __import__("sqlalchemy").URL.create(
+    database_url = URL.create(
         drivername="postgresql+psycopg2",
         username=DATABASE_CONFIG["user"],
         password=DATABASE_CONFIG["password"],
