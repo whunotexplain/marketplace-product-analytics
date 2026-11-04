@@ -1,3 +1,5 @@
+DROP MATERIALIZED VIEW IF EXISTS analytics.dm_weekly_retention;
+
 -- Grain: one row per first-observed cohort week and elapsed calendar week.
 -- Missing cohort/week combinations mean no observed activity row; they are not materialized as zero.
 
