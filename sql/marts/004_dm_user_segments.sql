@@ -1,3 +1,5 @@
+DROP MATERIALIZED VIEW IF EXISTS analytics.dm_user_segments;
+
 -- Grain: one row per visitor.
 -- Activity segments describe event frequency, not customer value.
 
